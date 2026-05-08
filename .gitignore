@@ -82,6 +82,13 @@ dashboard/coverage/
 Thumbs.db
 
 # =====================================================
+# Claude Code — personal/local memory files
+# =====================================================
+# CLAUDE.md (committed) is for shared project conventions.
+# CLAUDE.local.md (gitignored) is for personal notes only Claude reads.
+CLAUDE.local.md
+
+# =====================================================
 # Walkthrough screenshots (kept locally, not in repo)
 # =====================================================
 /*.png
