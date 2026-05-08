@@ -1,0 +1,89 @@
+# =====================================================
+# Sensitive — NEVER commit these
+# =====================================================
+.env
+.env.*
+*.pem
+*.key
+credentials
+.aws/
+secrets/
+
+# =====================================================
+# Terraform
+# =====================================================
+# Plugin cache and local module download
+.terraform/
+
+# State files — state lives REMOTELY in S3, never locally in repo
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Variable files often contain secrets or per-env values
+*.tfvars
+*.tfvars.json
+!example.tfvars
+
+# Local-only experimentation overrides
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# CLI crash logs
+crash.log
+crash.*.log
+
+# Plan output binary (Terraform writes plan files when --out is used)
+tfplan
+*.tfplan
+
+# NOTE: .terraform.lock.hcl is intentionally NOT ignored.
+# Terraform 0.14+ best practice is to commit it so provider
+# versions are pinned for reproducibility across collaborators.
+
+# =====================================================
+# Python (Lambda functions)
+# =====================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# Lambda packaging output
+*.zip
+build/
+dist/
+.lambda-build/
+
+# =====================================================
+# Node.js (Dashboard — React + Vite)
+# =====================================================
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.vite/
+dashboard/coverage/
+
+# =====================================================
+# IDE / OS
+# =====================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# =====================================================
+# Walkthrough screenshots (kept locally, not in repo)
+# =====================================================
+/*.png
+/*.jpg
+/*.jpeg
