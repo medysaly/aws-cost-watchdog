@@ -64,3 +64,28 @@ resource "aws_iam_role_policy" "cost_digest_lambda_ce" {
     ]
   })
 }
+
+# Inline policy: allow cost_digest Lambda to read watchdog/* secrets
+# Source: registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy
+resource "aws_iam_role_policy" "cost_digest_lambda_secrets" {
+  name = "secrets-manager-read"
+  role = aws_iam_role.cost_digest_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "secretsmanager:GetSecretValue"
+        Resource = "arn:aws:secretsmanager:us-east-1:992550705663:secret:watchdog/*"
+      }
+    ]
+  })
+}
+
+
+# Telegram bot credentials — value is JSON: {"bot_token": "...", "chat_id": "..."}
+resource "aws_secretsmanager_secret" "telegram_bot" {
+  name        = "watchdog/telegram-bot"
+  description = "Telegram bot token + chat ID for FinOps notifications — value set manually"
+}
