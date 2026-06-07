@@ -1,0 +1,44 @@
+name: terraform-plan
+
+# Runs on PR. Validates formatting + shows what Terraform WOULD do.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'terraform/**'
+      - 'lambdas/**'
+      - '.github/workflows/terraform-*.yml'
+
+permissions:
+  id-token: write   # required for OIDC token
+  contents: read    # required to checkout repo
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform   # saves typing -chdir=terraform
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::992550705663:role/watchdog-github-actions-role
+          aws-region: us-east-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.3
+
+      - name: Format check
+        run: terraform fmt -check -recursive
+
+      - name: Init
+        run: terraform init
+
+      - name: Plan
+        run: terraform plan -no-color
