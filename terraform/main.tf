@@ -141,3 +141,17 @@ resource "aws_scheduler_schedule" "cost_digest_daily" {
     role_arn = aws_iam_role.scheduler_cost_digest.arn
   }
 }
+
+# DynamoDB table: shared storage for findings from idle scanner, tag enforcer, anomaly handler
+# Source: registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/dynamodb_table
+# Schemaless except for the partition key (other attributes added per-item by the writers)
+resource "aws_dynamodb_table" "findings" {
+  name         = "watchdog-findings"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "finding_id"
+
+  attribute {
+    name = "finding_id"
+    type = "S"
+  }
+}
