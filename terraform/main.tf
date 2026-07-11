@@ -155,3 +155,84 @@ resource "aws_dynamodb_table" "findings" {
     type = "S"
   }
 }
+
+# ============================================================
+# Idle Resource Scanner Lambda — IAM role + permissions
+# ============================================================
+
+# Lambda execution role for idle_scanner
+resource "aws_iam_role" "idle_scanner_lambda" {
+  name = "watchdog-idle-scanner-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "lambda.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+# CloudWatch Logs (AWS-managed)
+resource "aws_iam_role_policy_attachment" "idle_scanner_logs" {
+  role       = aws_iam_role.idle_scanner_lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# Read-only EC2 access
+resource "aws_iam_role_policy" "idle_scanner_ec2_read" {
+  name = "ec2-describe"
+  role = aws_iam_role.idle_scanner_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ec2:DescribeVolumes",
+          "ec2:DescribeInstances",
+          "ec2:DescribeSnapshots",
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# Write findings to DynamoDB
+resource "aws_iam_role_policy" "idle_scanner_dynamodb_write" {
+  name = "dynamodb-write-findings"
+  role = aws_iam_role.idle_scanner_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "dynamodb:PutItem"
+        Resource = aws_dynamodb_table.findings.arn
+      }
+    ]
+  })
+}
+
+# Read watchdog/* secrets
+resource "aws_iam_role_policy" "idle_scanner_secrets_read" {
+  name = "secrets-manager-read"
+  role = aws_iam_role.idle_scanner_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "secretsmanager:GetSecretValue"
+        Resource = "arn:aws:secretsmanager:us-east-1:992550705663:secret:watchdog/*"
+      }
+    ]
+  })
+}
