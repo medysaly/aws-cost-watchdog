@@ -256,3 +256,57 @@ resource "aws_lambda_function" "idle_scanner" {
   handler          = "handler.handler"
   timeout          = 60
 }
+
+# ============================================================
+# Idle Scanner Schedule — nightly cron
+# ============================================================
+
+# IAM role: EventBridge Scheduler assumes this to invoke the idle scanner Lambda
+resource "aws_iam_role" "scheduler_idle_scanner" {
+  name = "watchdog-scheduler-idle-scanner-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "scheduler.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+# Inline policy: scheduler can invoke ONLY the idle scanner Lambda
+resource "aws_iam_role_policy" "scheduler_invoke_idle_scanner" {
+  name = "invoke-idle-scanner-lambda"
+  role = aws_iam_role.scheduler_idle_scanner.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "lambda:InvokeFunction"
+        Resource = aws_lambda_function.idle_scanner.arn
+      }
+    ]
+  })
+}
+
+# The nightly schedule (midnight ET)
+resource "aws_scheduler_schedule" "idle_scanner_daily" {
+  name = "watchdog-idle-scanner-daily"
+
+  flexible_time_window {
+    mode = "OFF"
+  }
+
+  schedule_expression          = "cron(0 0 * * ? *)"
+  schedule_expression_timezone = "America/New_York"
+
+  target {
+    arn      = aws_lambda_function.idle_scanner.arn
+    role_arn = aws_iam_role.scheduler_idle_scanner.arn
+  }
+}
