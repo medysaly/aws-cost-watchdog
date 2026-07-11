@@ -2,7 +2,7 @@
 
 > Serverless FinOps watchdog for AWS — daily cost digests, idle resource detection, tag enforcement, and anomaly alerts. Provisioned via Terraform, deployed via GitHub Actions OIDC, target steady-state cost **<$2/month**.
 
-Built as a portfolio project for cloud engineering roles. Already paid for itself: surfaced a $21/mo zombie QuickSight subscription on first run.
+Already paid for itself: surfaced a $21/mo zombie QuickSight subscription on the first real run.
 
 ## Status
 
@@ -56,7 +56,7 @@ Every team using AWS has someone responsible for keeping the bill predictable an
    Secrets (slack-webhook, telegram-bot) ← Secrets Manager ← both Lambdas at cold start
 ```
 
-See [docs/architecture.md](docs/architecture.md) for full diagrams and component details.
+A full architecture doc with rendered diagrams will land in `docs/architecture.md` as the project matures.
 
 ## Tech stack
 
@@ -118,18 +118,18 @@ Cost drivers:
 - **EventBridge Scheduler**: free tier covers all schedules
 - **S3 + DynamoDB (Terraform state)**: pennies
 
-Detailed breakdown in [docs/cost-of-running.md](docs/cost-of-running.md) *(coming)*.
+A full monthly breakdown will land in `docs/cost-of-running.md` once the project stabilizes.
 
 ## Documentation
 
-- [Architecture](docs/architecture.md) — system design and component interactions
-- [Tradeoffs](docs/tradeoffs.md) — design decisions and the reasoning behind them
-- [Threat model](docs/threat-model.md) — security analysis
-- [Cost of running](docs/cost-of-running.md) — monthly cost breakdown
-- [Runbook](docs/runbook.md) — operational procedures
+*Being written as the project matures. Planned:*
 
-*(Docs are being written as the project matures.)*
+- **Architecture** — system design and component interactions
+- **Tradeoffs** — design decisions and the reasoning behind them
+- **Threat model** — security analysis
+- **Cost of running** — monthly cost breakdown
+- **Runbook** — operational procedures
 
 ## Author
 
-Built by [Mehdi Salhi](mailto:under.salhi@gmail.com) as a portfolio project for cloud engineering / DevOps roles.
+Built and maintained by [Mehdi Salhi](mailto:under.salhi@gmail.com).
