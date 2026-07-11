@@ -236,3 +236,23 @@ resource "aws_iam_role_policy" "idle_scanner_secrets_read" {
     ]
   })
 }
+
+# ============================================================
+# Idle Resource Scanner Lambda — function
+# ============================================================
+
+data "archive_file" "idle_scanner" {
+  type        = "zip"
+  source_file = "${path.module}/../lambdas/idle_scanner/handler.py"
+  output_path = "${path.module}/builds/idle_scanner.zip"
+}
+
+resource "aws_lambda_function" "idle_scanner" {
+  function_name    = "watchdog-idle-scanner-lambda"
+  role             = aws_iam_role.idle_scanner_lambda.arn
+  filename         = data.archive_file.idle_scanner.output_path
+  source_code_hash = data.archive_file.idle_scanner.output_base64sha256
+  runtime          = "python3.12"
+  handler          = "handler.handler"
+  timeout          = 60
+}
