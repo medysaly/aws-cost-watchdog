@@ -237,6 +237,26 @@ resource "aws_iam_role_policy" "idle_scanner_secrets_read" {
   })
 }
 
+# Read-only S3 access (for finding empty buckets)
+resource "aws_iam_role_policy" "idle_scanner_s3_read" {
+  name = "s3-list-read"
+  role = aws_iam_role.idle_scanner_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:ListAllMyBuckets",
+          "s3:ListBucket",
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 # ============================================================
 # Idle Resource Scanner Lambda — function
 # ============================================================
