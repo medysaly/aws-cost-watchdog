@@ -366,3 +366,65 @@ resource "aws_iam_role_policy" "anomaly_handler_dynamodb_write" {
     ]
   })
 }
+
+# ============================================================
+# Anomaly Handler Lambda — function + SNS trigger (Terraform-managed)
+# ============================================================
+
+# SNS topic
+resource "aws_sns_topic" "anomaly_alerts" {
+  name = "watchdog-anomaly-alerts"
+}
+
+# Topic policy: allow Cost Anomaly Detection to publish
+resource "aws_sns_topic_policy" "anomaly_alerts_ce_publish" {
+  arn = aws_sns_topic.anomaly_alerts.arn
+
+  policy = jsonencode({
+    Version = "2008-10-17"
+    Id      = "watchdog-anomaly-alerts-policy"
+    Statement = [
+      {
+        Sid       = "AllowCostAnomalyDetectionToPublish"
+        Effect    = "Allow"
+        Principal = { Service = "costalerts.amazonaws.com" }
+        Action    = "SNS:Publish"
+        Resource  = aws_sns_topic.anomaly_alerts.arn
+      }
+    ]
+  })
+}
+
+# Zip the Lambda source
+data "archive_file" "anomaly_handler" {
+  type        = "zip"
+  source_file = "${path.module}/../lambdas/anomaly_handler/handler.py"
+  output_path = "${path.module}/builds/anomaly_handler.zip"
+}
+
+# The Lambda function
+resource "aws_lambda_function" "anomaly_handler" {
+  function_name    = "watchdog-anomaly-handler-lambda"
+  role             = aws_iam_role.anomaly_handler_lambda.arn
+  filename         = data.archive_file.anomaly_handler.output_path
+  source_code_hash = data.archive_file.anomaly_handler.output_base64sha256
+  runtime          = "python3.12"
+  handler          = "handler.handler"
+  timeout          = 30
+}
+
+# Allow SNS to invoke the Lambda
+resource "aws_lambda_permission" "sns_invoke_anomaly_handler" {
+  statement_id  = "AllowSNSInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.anomaly_handler.function_name
+  principal     = "sns.amazonaws.com"
+  source_arn    = aws_sns_topic.anomaly_alerts.arn
+}
+
+# Subscribe the Lambda to the SNS topic
+resource "aws_sns_topic_subscription" "anomaly_handler_from_sns" {
+  topic_arn = aws_sns_topic.anomaly_alerts.arn
+  protocol  = "lambda"
+  endpoint  = aws_lambda_function.anomaly_handler.arn
+}
