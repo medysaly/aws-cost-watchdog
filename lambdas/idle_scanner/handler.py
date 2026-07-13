@@ -5,12 +5,14 @@ import uuid
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
+
 # --- Notifiers (unchanged; duplicated from other Lambdas — refactor to Layer later) ---
 
 def get_secret(secret_id):
     sm = boto3.client("secretsmanager")
     response = sm.get_secret_value(SecretId=secret_id)
     return response["SecretString"]
+
 
 def notify_slack(message):
     webhook_url = get_secret("watchdog/slack-webhook")
@@ -22,6 +24,7 @@ def notify_slack(message):
     )
     with urllib.request.urlopen(req) as response:
         return response.status
+
 
 def notify_telegram(message):
     secret_json = get_secret("watchdog/telegram-bot")
@@ -39,6 +42,7 @@ def notify_telegram(message):
     with urllib.request.urlopen(req) as response:
         return response.status
 
+
 # --- Scanners ---
 
 def find_unattached_volumes():
@@ -48,6 +52,7 @@ def find_unattached_volumes():
         Filters=[{"Name": "status", "Values": ["available"]}]
     )
     return response["Volumes"]
+
 
 def find_stopped_ec2_instances():
     """EC2 instances in the 'stopped' state."""
@@ -59,6 +64,7 @@ def find_stopped_ec2_instances():
     for reservation in response["Reservations"]:
         instances.extend(reservation["Instances"])
     return instances
+
 
 def find_empty_s3_buckets():
     """S3 buckets with zero objects."""
@@ -74,12 +80,14 @@ def find_empty_s3_buckets():
             print(f"Could not list bucket {bucket['Name']}: {e}")
     return empty
 
+
 def find_old_snapshots(days=90):
     """EBS snapshots owned by this account older than N days."""
     ec2 = boto3.client("ec2")
     response = ec2.describe_snapshots(OwnerIds=["self"])
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     return [s for s in response["Snapshots"] if s["StartTime"] < cutoff]
+
 
 # --- Finding builders (one per resource type) ---
 
@@ -97,6 +105,7 @@ def build_ebs_finding(volume):
         "estimated_monthly_cost":  round(size_gb * 0.08, 2),
     }
 
+
 def build_ec2_finding(instance):
     return {
         "finding_id":              str(uuid.uuid4()),
@@ -109,6 +118,7 @@ def build_ec2_finding(instance):
         "estimated_monthly_cost":  0,
     }
 
+
 def build_s3_finding(bucket):
     return {
         "finding_id":              str(uuid.uuid4()),
@@ -119,6 +129,7 @@ def build_s3_finding(bucket):
         "creation_date":           bucket["CreationDate"].isoformat(),
         "estimated_monthly_cost":  0,
     }
+
 
 def build_snapshot_finding(snapshot):
     size_gb = snapshot.get("VolumeSize", 0)
@@ -134,6 +145,7 @@ def build_snapshot_finding(snapshot):
         "estimated_monthly_cost":  round(size_gb * 0.05, 2),
     }
 
+
 # --- DynamoDB write (generic, auto-types values) ---
 
 def write_finding_to_dynamodb(finding):
@@ -148,6 +160,7 @@ def write_finding_to_dynamodb(finding):
         else:
             item[key] = {"S": str(value)}
     dynamodb.put_item(TableName="watchdog-findings", Item=item)
+
 
 # --- Summary ---
 
@@ -165,12 +178,14 @@ def format_finding(finding):
         return f"  {rid}: {finding['size_gb']} GB, {finding['age_days']} days old, ~${finding['estimated_monthly_cost']:.2f}/mo"
     return f"  {rid}"
 
+
 CATEGORY_LABELS = {
     "idle_ebs":      "Unattached EBS volumes",
     "stopped_ec2":   "Stopped EC2 instances",
     "empty_s3":      "Empty S3 buckets",
     "old_snapshot":  "Old EBS snapshots (>90 days)",
 }
+
 
 def build_summary(findings):
     if not findings:
@@ -181,3 +196,50 @@ def build_summary(findings):
     by_category = defaultdict(list)
     for f in findings:
         by_category[f["category"]].append(f)
+
+    lines = [
+        f"Idle scan: {len(findings)} finding(s), estimated waste ${total_cost:.2f}/mo",
+        "",
+    ]
+    for cat_key, cat_label in CATEGORY_LABELS.items():
+        cat_findings = by_category.get(cat_key, [])
+        if not cat_findings:
+            continue
+        lines.append(f"{cat_label} ({len(cat_findings)}):")
+        for f in cat_findings:
+            lines.append(format_finding(f))
+        lines.append("")
+
+    return "\n".join(lines).strip()
+
+
+# --- Handler ---
+
+def handler(event, context):
+    findings = []
+
+    # Run each scanner
+    for volume in find_unattached_volumes():
+        findings.append(build_ebs_finding(volume))
+
+    for instance in find_stopped_ec2_instances():
+        findings.append(build_ec2_finding(instance))
+
+    for bucket in find_empty_s3_buckets():
+        findings.append(build_s3_finding(bucket))
+
+    for snapshot in find_old_snapshots():
+        findings.append(build_snapshot_finding(snapshot))
+
+    # Persist all findings
+    for finding in findings:
+        write_finding_to_dynamodb(finding)
+
+    # Build and send summary
+    summary = build_summary(findings)
+    print(summary)
+
+    notify_slack(summary)
+    notify_telegram(summary)
+
+    return {"statusCode": 200, "body": summary}
