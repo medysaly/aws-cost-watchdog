@@ -310,3 +310,59 @@ resource "aws_scheduler_schedule" "idle_scanner_daily" {
     role_arn = aws_iam_role.scheduler_idle_scanner.arn
   }
 }
+
+# ============================================================
+# Anomaly Handler Lambda — IAM role + permissions
+# ============================================================
+
+resource "aws_iam_role" "anomaly_handler_lambda" {
+  name = "watchdog-anomaly-handler-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "lambda.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "anomaly_handler_logs" {
+  role       = aws_iam_role.anomaly_handler_lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy" "anomaly_handler_secrets_read" {
+  name = "secrets-manager-read"
+  role = aws_iam_role.anomaly_handler_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "secretsmanager:GetSecretValue"
+        Resource = "arn:aws:secretsmanager:us-east-1:992550705663:secret:watchdog/*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "anomaly_handler_dynamodb_write" {
+  name = "dynamodb-write-findings"
+  role = aws_iam_role.anomaly_handler_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "dynamodb:PutItem"
+        Resource = aws_dynamodb_table.findings.arn
+      }
+    ]
+  })
+}
