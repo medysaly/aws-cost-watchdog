@@ -636,3 +636,24 @@ resource "aws_iam_role_policy" "dashboard_reader_dynamodb_read" {
     ]
   })
 }
+
+
+# ============================================================
+# Dashboard Reader Lambda — function
+# ============================================================
+
+data "archive_file" "dashboard_reader" {
+  type        = "zip"
+  source_file = "${path.module}/../lambdas/dashboard_reader/handler.py"
+  output_path = "${path.module}/builds/dashboard_reader.zip"
+}
+
+resource "aws_lambda_function" "dashboard_reader" {
+  function_name    = "watchdog-dashboard-reader-lambda"
+  role             = aws_iam_role.dashboard_reader_lambda.arn
+  filename         = data.archive_file.dashboard_reader.output_path
+  source_code_hash = data.archive_file.dashboard_reader.output_base64sha256
+  runtime          = "python3.12"
+  handler          = "handler.handler"
+  timeout          = 30
+}
