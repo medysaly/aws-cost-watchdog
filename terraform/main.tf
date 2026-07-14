@@ -448,3 +448,78 @@ resource "aws_sns_topic_subscription" "anomaly_handler_from_sns" {
   protocol  = "lambda"
   endpoint  = aws_lambda_function.anomaly_handler.arn
 }
+
+# ============================================================
+# Tag Enforcer Lambda — IAM role + permissions
+# ============================================================
+
+resource "aws_iam_role" "tag_enforcer_lambda" {
+  name = "watchdog-tag-enforcer-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "lambda.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "tag_enforcer_logs" {
+  role       = aws_iam_role.tag_enforcer_lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy" "tag_enforcer_config_read" {
+  name = "config-compliance-read"
+  role = aws_iam_role.tag_enforcer_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "config:GetComplianceDetailsByConfigRule",
+          "config:DescribeComplianceByConfigRule",
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "tag_enforcer_dynamodb_write" {
+  name = "dynamodb-write-findings"
+  role = aws_iam_role.tag_enforcer_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "dynamodb:PutItem"
+        Resource = aws_dynamodb_table.findings.arn
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "tag_enforcer_secrets_read" {
+  name = "secrets-manager-read"
+  role = aws_iam_role.tag_enforcer_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "secretsmanager:GetSecretValue"
+        Resource = "arn:aws:secretsmanager:us-east-1:992550705663:secret:watchdog/*"
+      }
+    ]
+  })
+}
