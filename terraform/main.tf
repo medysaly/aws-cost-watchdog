@@ -523,3 +523,76 @@ resource "aws_iam_role_policy" "tag_enforcer_secrets_read" {
     ]
   })
 }
+
+
+# ============================================================
+# Tag Enforcer Lambda — function + weekly schedule
+# ============================================================
+
+# Zip the Lambda source
+data "archive_file" "tag_enforcer" {
+  type        = "zip"
+  source_file = "${path.module}/../lambdas/tag_enforcer/handler.py"
+  output_path = "${path.module}/builds/tag_enforcer.zip"
+}
+
+# The Lambda function
+resource "aws_lambda_function" "tag_enforcer" {
+  function_name    = "watchdog-tag-enforcer-lambda"
+  role             = aws_iam_role.tag_enforcer_lambda.arn
+  filename         = data.archive_file.tag_enforcer.output_path
+  source_code_hash = data.archive_file.tag_enforcer.output_base64sha256
+  runtime          = "python3.12"
+  handler          = "handler.handler"
+  timeout          = 60
+}
+
+# IAM role: EventBridge Scheduler assumes this to invoke our Lambda
+resource "aws_iam_role" "scheduler_tag_enforcer" {
+  name = "watchdog-scheduler-tag-enforcer-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "scheduler.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+# Inline policy: scheduler can invoke ONLY the tag enforcer Lambda
+resource "aws_iam_role_policy" "scheduler_invoke_tag_enforcer" {
+  name = "invoke-tag-enforcer-lambda"
+  role = aws_iam_role.scheduler_tag_enforcer.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "lambda:InvokeFunction"
+        Resource = aws_lambda_function.tag_enforcer.arn
+      }
+    ]
+  })
+}
+
+# Weekly schedule (Monday 9 AM ET)
+resource "aws_scheduler_schedule" "tag_enforcer_weekly" {
+  name = "watchdog-tag-enforcer-weekly"
+
+  flexible_time_window {
+    mode = "OFF"
+  }
+
+  schedule_expression          = "cron(0 9 ? * MON *)"
+  schedule_expression_timezone = "America/New_York"
+
+  target {
+    arn      = aws_lambda_function.tag_enforcer.arn
+    role_arn = aws_iam_role.scheduler_tag_enforcer.arn
+  }
+}
