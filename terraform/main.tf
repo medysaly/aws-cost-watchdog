@@ -657,3 +657,57 @@ resource "aws_lambda_function" "dashboard_reader" {
   handler          = "handler.handler"
   timeout          = 30
 }
+
+# ============================================================
+# Dashboard API — API Gateway HTTP API + Lambda integration
+# ============================================================
+
+# The HTTP API itself
+resource "aws_apigatewayv2_api" "dashboard" {
+  name          = "watchdog-dashboard-api"
+  protocol_type = "HTTP"
+
+  cors_configuration {
+    allow_origins = ["*"]
+    allow_methods = ["GET"]
+    allow_headers = ["*"]
+    max_age       = 3600
+  }
+}
+
+# Lambda integration (tells the API "route requests to this Lambda")
+resource "aws_apigatewayv2_integration" "dashboard_reader" {
+  api_id                 = aws_apigatewayv2_api.dashboard.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.dashboard_reader.invoke_arn
+  payload_format_version = "2.0"
+}
+
+# The route: GET /findings → dashboard_reader Lambda
+resource "aws_apigatewayv2_route" "findings" {
+  api_id    = aws_apigatewayv2_api.dashboard.id
+  route_key = "GET /findings"
+  target    = "integrations/${aws_apigatewayv2_integration.dashboard_reader.id}"
+}
+
+# Default stage with auto-deploy
+resource "aws_apigatewayv2_stage" "default" {
+  api_id      = aws_apigatewayv2_api.dashboard.id
+  name        = "$default"
+  auto_deploy = true
+}
+
+# Allow API Gateway to invoke the Lambda
+resource "aws_lambda_permission" "apigw_invoke_dashboard_reader" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.dashboard_reader.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.dashboard.execution_arn}/*/*"
+}
+
+# Output the URL so we can reference it in the frontend + docs
+output "dashboard_api_url" {
+  value       = "${aws_apigatewayv2_api.dashboard.api_endpoint}/findings"
+  description = "URL to the dashboard findings endpoint"
+}
