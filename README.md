@@ -19,7 +19,7 @@ Four Lambdas live, dashboard deployed, everything Terraform-managed and CI-deplo
 | **Tag enforcement** — AWS Config `required-tags` rule → weekly Lambda → Slack + Telegram | ✅ Live |
 | DynamoDB findings table — shared storage across scanner Lambdas | ✅ Live |
 | **Dashboard** — React + Vite + Tailwind on S3 + CloudFront + API Gateway | ✅ Live |
-| Dashboard CI/CD (auto-build + upload + invalidate) | ⏳ Manual only |
+| Dashboard CI/CD (auto-build + upload + invalidate CloudFront) | ✅ Live |
 | Docs (architecture, threat model, tradeoffs, runbook, cost-of-running) | ⏳ Being written |
 
 ## Why this exists
@@ -31,7 +31,7 @@ Every team using AWS has someone responsible for keeping the bill predictable an
 3. **Tag enforcement** — AWS Config's `required-tags` rule watches for resources missing `Project`, `Environment`, `ManagedBy` tags; weekly report of violations
 4. **Cost anomaly alerts** — AWS Cost Anomaly Detection events (ML-based) relayed via SNS to Slack + Telegram
 
-A React dashboard displays all findings in one view.
+A React dashboard displays all findings in one view — see [Dashboard](#dashboard) below.
 
 ## Architecture
 
@@ -81,6 +81,20 @@ A full architecture doc with rendered diagrams will land in `docs/architecture.m
 - **Secrets**: AWS Secrets Manager — never `.env`, never `*.tfvars`
 - **Least privilege**: separate IAM role per Lambda; inline policies scoped to specific resource ARNs
 
+## Dashboard
+
+Single-page React app that reads from the DynamoDB findings table via API Gateway. Auto-refreshes every 30 seconds — leave it open and new Lambda findings appear without a page reload.
+
+Key elements:
+- **4 KPI cards** — total findings, estimated monthly waste, active-vs-monitored category count, last scan time
+- **Distribution donut chart** with the total findings count centered in the ring — instant visual + numeric read
+- **Monitored categories breakdown** — all 6 category types the watchdog can detect, with progress bars showing distribution. Zero-count categories stay visible but muted, so users see the full monitoring surface.
+- **Filter chips** in the findings-table header, sourced from the full category list (grayed-out for empty categories, active for populated ones)
+- **Findings table** with color-coded category badges, monospaced resource IDs, right-aligned tabular numbers
+- **Manual refresh button** with animated spinner + subtle "auto-refresh 30s" indicator in the header
+
+Frontend deploys automatically on `git push` — `dashboard-deploy.yml` builds React → uploads to S3 → invalidates CloudFront cache. Live in ~2 min.
+
 ## Real-world wins
 
 - **$21/mo QuickSight zombie subscription** found and cancelled within the first hour of the cost digest running (~$250/year saved).
@@ -110,12 +124,11 @@ git push  # main → terraform-apply.yml runs
 aws secretsmanager put-secret-value --secret-id watchdog/slack-webhook --secret-string "https://hooks.slack.com/..."
 aws secretsmanager put-secret-value --secret-id watchdog/telegram-bot --secret-string '{"bot_token":"...","chat_id":"..."}'
 
-# 5. Build and upload the dashboard frontend
+# 5. Dashboard deploys automatically on push — first time, install deps locally so the CI knows about them
 cd dashboard/
-npm install
-npm run build
-aws s3 sync dist/ s3://watchdog-dashboard-ms-2026/ --delete
+npm install    # writes package-lock.json (commit this so CI uses `npm ci` deterministically)
 cd ..
+# From here: any change to dashboard/** + `git push` → CI builds, uploads to S3, invalidates CloudFront
 
 # 6. Test — schedules run automatically, but you can invoke on-demand
 aws lambda invoke --function-name watchdog-cost-digest-lambda /tmp/out.json
