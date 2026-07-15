@@ -711,3 +711,96 @@ output "dashboard_api_url" {
   value       = "${aws_apigatewayv2_api.dashboard.api_endpoint}/findings"
   description = "URL to the dashboard findings endpoint"
 }
+
+# ============================================================
+# Dashboard Hosting — S3 + CloudFront
+# ============================================================
+
+resource "aws_s3_bucket" "dashboard" {
+  bucket = "watchdog-dashboard-ms-2026"
+}
+
+resource "aws_s3_bucket_public_access_block" "dashboard" {
+  bucket                  = aws_s3_bucket.dashboard.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_cloudfront_origin_access_control" "dashboard" {
+  name                              = "watchdog-dashboard-oac"
+  description                       = "OAC for watchdog dashboard S3 origin"
+  origin_access_control_origin_type = "s3"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
+}
+
+resource "aws_cloudfront_distribution" "dashboard" {
+  enabled             = true
+  default_root_object = "index.html"
+  comment             = "AWS Cost Watchdog dashboard"
+  price_class         = "PriceClass_100"
+
+  origin {
+    domain_name              = aws_s3_bucket.dashboard.bucket_regional_domain_name
+    origin_id                = "s3-dashboard"
+    origin_access_control_id = aws_cloudfront_origin_access_control.dashboard.id
+  }
+
+  default_cache_behavior {
+    target_origin_id       = "s3-dashboard"
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = ["GET", "HEAD"]
+    cached_methods         = ["GET", "HEAD"]
+    cache_policy_id        = "658327ea-f89d-4fab-a63d-7e88639e58f6" # AWS-managed CachingOptimized
+  }
+
+  # SPA fallback: 403/404 → index.html
+  custom_error_response {
+    error_code         = 403
+    response_code      = 200
+    response_page_path = "/index.html"
+  }
+  custom_error_response {
+    error_code         = 404
+    response_code      = 200
+    response_page_path = "/index.html"
+  }
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
+}
+
+resource "aws_s3_bucket_policy" "dashboard_cloudfront_read" {
+  bucket = aws_s3_bucket.dashboard.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "AllowCloudFrontOACRead"
+        Effect    = "Allow"
+        Principal = { Service = "cloudfront.amazonaws.com" }
+        Action    = "s3:GetObject"
+        Resource  = "${aws_s3_bucket.dashboard.arn}/*"
+        Condition = {
+          StringEquals = {
+            "AWS:SourceArn" = aws_cloudfront_distribution.dashboard.arn
+          }
+        }
+      }
+    ]
+  })
+}
+
+output "dashboard_url" {
+  value       = "https://${aws_cloudfront_distribution.dashboard.domain_name}"
+  description = "URL to access the dashboard"
+}
