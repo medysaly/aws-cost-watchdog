@@ -1,0 +1,74 @@
+name: dashboard-deploy
+
+# ============================================================
+# When to run
+# ============================================================
+# Fire on push to main, but ONLY when dashboard files change
+# (avoids running the build for Terraform-only or README changes)
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'dashboard/**'
+      - '.github/workflows/dashboard-deploy.yml'
+
+# ============================================================
+# Permissions this workflow needs
+# ============================================================
+permissions:
+  id-token: write   # required for OIDC federation → AWS
+  contents: read    # required for actions/checkout to clone repo
+
+# ============================================================
+# The single job (could have multiple jobs in complex workflows)
+# ============================================================
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest              # spin up an Ubuntu VM
+    defaults:
+      run:
+        working-directory: dashboard    # every `run:` command executes from dashboard/
+
+    steps:
+      # =====================================================
+      # CI portion — verify the code builds
+      # =====================================================
+
+      - name: Checkout code                         # ← setup
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js                         # ← setup (install Node 20)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install dependencies                  # ← CI (validates package.json/lock)
+        run: npm ci
+
+      - name: Build React app                       # ← CI (produces dist/ artifact)
+        run: npm run build
+
+      # =====================================================
+      # CD portion — deploy the built artifact
+      # =====================================================
+
+      - name: Configure AWS credentials via OIDC    # ← auth (short-lived creds)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::992550705663:role/watchdog-github-actions-role
+          aws-region: us-east-1
+
+      - name: Upload build to S3                    # ← CD (files live in S3 now)
+        run: aws s3 sync dist/ s3://watchdog-dashboard-ms-2026/ --delete
+
+      - name: Invalidate CloudFront cache           # ← CD (users see new version)
+        run: |
+          DISTRIBUTION_ID=$(aws cloudfront list-distributions \
+            --query "DistributionList.Items[?Comment=='AWS Cost Watchdog dashboard'].Id" \
+            --output text)
+          echo "Invalidating distribution $DISTRIBUTION_ID"
+          aws cloudfront create-invalidation \
+            --distribution-id "$DISTRIBUTION_ID" \
+            --paths "/*"
