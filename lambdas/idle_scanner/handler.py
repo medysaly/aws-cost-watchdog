@@ -5,41 +5,43 @@ from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
 
-# --- Notifiers (unchanged; duplicated from other Lambdas — refactor to Layer later) ---
+# --- Handler (entry point) ---
 
-def get_secret(secret_id):
-    sm = boto3.client("secretsmanager")
-    response = sm.get_secret_value(SecretId=secret_id)
-    return response["SecretString"]
+def handler(event, context):
+    findings = []
 
+    # Run each scanner
+    for volume in find_unattached_volumes():
+        findings.append(build_ebs_finding(volume))
 
-def notify_slack(message):
-    webhook_url = get_secret("watchdog/slack-webhook")
-    payload = json.dumps({"text": message}).encode("utf-8")
-    req = urllib.request.Request(
-        webhook_url,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req) as response:
-        return response.status
+    for instance in find_stopped_ec2_instances():
+        findings.append(build_ec2_finding(instance))
 
+    for bucket in find_empty_s3_buckets():
+        findings.append(build_s3_finding(bucket))
 
-def notify_telegram(message):
-    secret_json = get_secret("watchdog/telegram-bot")
-    creds = json.loads(secret_json)
-    url = f"https://api.telegram.org/bot{creds['bot_token']}/sendMessage"
-    payload = json.dumps({
-        "chat_id": creds["chat_id"],
-        "text": message,
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req) as response:
-        return response.status
+    for snapshot in find_old_snapshots():
+        findings.append(build_snapshot_finding(snapshot))
+
+    # Filter to just NEW findings (not seen in DynamoDB before)
+    new_findings = [f for f in findings if is_new_finding(f["finding_id"])]
+
+    # Persist all findings (idempotent — deterministic PK overwrites)
+    for finding in findings:
+        write_finding_to_dynamodb(finding)
+
+    # Silent run if nothing is new
+    if not new_findings:
+        message = "No new findings — silent run."
+        print(message)
+        return {"statusCode": 200, "body": message}
+
+    # Alert on NEW findings only
+    summary = build_summary(new_findings)
+    print(summary)
+    notify_slack(summary)
+    notify_telegram(summary)
+    return {"statusCode": 200, "body": summary}
 
 
 # --- Scanners ---
@@ -149,7 +151,7 @@ def build_snapshot_finding(snapshot):
     }
 
 
-# --- DynamoDB write (generic, auto-types values) ---
+# --- DynamoDB helpers ---
 
 def is_new_finding(finding_id):
     """Check if a finding with this ID already exists in the table."""
@@ -159,8 +161,6 @@ def is_new_finding(finding_id):
         Key={"finding_id": {"S": finding_id}}
     )
     return "Item" not in response
-
-
 
 
 def write_finding_to_dynamodb(finding):
@@ -177,22 +177,7 @@ def write_finding_to_dynamodb(finding):
     dynamodb.put_item(TableName="watchdog-findings", Item=item)
 
 
-# --- Summary ---
-
-def format_finding(finding):
-    """One-line human-readable string per finding."""
-    cat = finding["category"]
-    rid = finding["resource_id"]
-    if cat == "idle_ebs":
-        return f"  {rid}: {finding['size_gb']} GB {finding['volume_type']}, ~${finding['estimated_monthly_cost']:.2f}/mo"
-    if cat == "stopped_ec2":
-        return f"  {rid}: {finding['instance_type']} stopped"
-    if cat == "empty_s3":
-        return f"  {rid}: empty bucket"
-    if cat == "old_snapshot":
-        return f"  {rid}: {finding['size_gb']} GB, {finding['age_days']} days old, ~${finding['estimated_monthly_cost']:.2f}/mo"
-    return f"  {rid}"
-
+# --- Summary formatting ---
 
 CATEGORY_LABELS = {
     "idle_ebs":      "Unattached EBS volumes",
@@ -228,42 +213,53 @@ def build_summary(findings):
     return "\n".join(lines).strip()
 
 
-# --- Handler ---
+def format_finding(finding):
+    """One-line human-readable string per finding."""
+    cat = finding["category"]
+    rid = finding["resource_id"]
+    if cat == "idle_ebs":
+        return f"  {rid}: {finding['size_gb']} GB {finding['volume_type']}, ~${finding['estimated_monthly_cost']:.2f}/mo"
+    if cat == "stopped_ec2":
+        return f"  {rid}: {finding['instance_type']} stopped"
+    if cat == "empty_s3":
+        return f"  {rid}: empty bucket"
+    if cat == "old_snapshot":
+        return f"  {rid}: {finding['size_gb']} GB, {finding['age_days']} days old, ~${finding['estimated_monthly_cost']:.2f}/mo"
+    return f"  {rid}"
 
-def handler(event, context):
-    findings = []
 
-    # Run each scanner
-    for volume in find_unattached_volumes():
-        findings.append(build_ebs_finding(volume))
+# --- Notifiers ---
 
-    for instance in find_stopped_ec2_instances():
-        findings.append(build_ec2_finding(instance))
+def notify_slack(message):
+    webhook_url = get_secret("watchdog/slack-webhook")
+    payload = json.dumps({"text": message}).encode("utf-8")
+    req = urllib.request.Request(
+        webhook_url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req) as response:
+        return response.status
 
-    for bucket in find_empty_s3_buckets():
-        findings.append(build_s3_finding(bucket))
 
-    for snapshot in find_old_snapshots():
-        findings.append(build_snapshot_finding(snapshot))
+def notify_telegram(message):
+    secret_json = get_secret("watchdog/telegram-bot")
+    creds = json.loads(secret_json)
+    url = f"https://api.telegram.org/bot{creds['bot_token']}/sendMessage"
+    payload = json.dumps({
+        "chat_id": creds["chat_id"],
+        "text": message,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req) as response:
+        return response.status
 
-    # Filter to just NEW findings (not seen in DynamoDB before)
-    new_findings = [f for f in findings if is_new_finding(f["finding_id"])]
 
-    # Persist all findings (idempotent — deterministic PK overwrites)
-    for finding in findings:
-        write_finding_to_dynamodb(finding)
-
-    # Silent run if nothing is new
-    if not new_findings:
-        message = "No new findings — silent run."
-        print(message)
-        return {"statusCode": 200, "body": message}
-
-    # Alert on NEW findings only
-    summary = build_summary(new_findings)
-    print(summary)
-
-    notify_slack(summary)
-    notify_telegram(summary)
-
-    return {"statusCode": 200, "body": summary}
+def get_secret(secret_id):
+    sm = boto3.client("secretsmanager")
+    response = sm.get_secret_value(SecretId=secret_id)
+    return response["SecretString"]
