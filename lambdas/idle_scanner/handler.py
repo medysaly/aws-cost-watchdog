@@ -1,7 +1,6 @@
 import boto3
 import json
 import urllib.request
-import uuid
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
@@ -92,10 +91,11 @@ def find_old_snapshots(days=90):
 # --- Finding builders (one per resource type) ---
 
 def build_ebs_finding(volume):
+    resource_id = volume["VolumeId"]
     size_gb = volume["Size"]
     return {
-        "finding_id":              str(uuid.uuid4()),
-        "resource_id":             volume["VolumeId"],
+        "finding_id":              f"idle_ebs:{resource_id}",
+        "resource_id":             resource_id,
         "resource_type":           "ebs_volume",
         "category":                "idle_ebs",
         "detected_at":             datetime.now(timezone.utc).isoformat(),
@@ -107,9 +107,10 @@ def build_ebs_finding(volume):
 
 
 def build_ec2_finding(instance):
+    resource_id = instance["InstanceId"]
     return {
-        "finding_id":              str(uuid.uuid4()),
-        "resource_id":             instance["InstanceId"],
+        "finding_id":              f"stopped_ec2:{resource_id}",
+        "resource_id":             resource_id,
         "resource_type":           "ec2_instance",
         "category":                "stopped_ec2",
         "detected_at":             datetime.now(timezone.utc).isoformat(),
@@ -120,9 +121,10 @@ def build_ec2_finding(instance):
 
 
 def build_s3_finding(bucket):
+    resource_id = bucket["Name"]
     return {
-        "finding_id":              str(uuid.uuid4()),
-        "resource_id":             bucket["Name"],
+        "finding_id":              f"empty_s3:{resource_id}",
+        "resource_id":             resource_id,
         "resource_type":           "s3_bucket",
         "category":                "empty_s3",
         "detected_at":             datetime.now(timezone.utc).isoformat(),
@@ -134,9 +136,10 @@ def build_s3_finding(bucket):
 def build_snapshot_finding(snapshot):
     size_gb = snapshot.get("VolumeSize", 0)
     age_days = (datetime.now(timezone.utc) - snapshot["StartTime"]).days
+    resource_id = snapshot["SnapshotId"]
     return {
-        "finding_id":              str(uuid.uuid4()),
-        "resource_id":             snapshot["SnapshotId"],
+        "finding_id":              f"old_snapshot:{resource_id}",
+        "resource_id":             resource_id,
         "resource_type":           "ebs_snapshot",
         "category":                "old_snapshot",
         "detected_at":             datetime.now(timezone.utc).isoformat(),
@@ -147,6 +150,18 @@ def build_snapshot_finding(snapshot):
 
 
 # --- DynamoDB write (generic, auto-types values) ---
+
+def is_new_finding(finding_id):
+    """Check if a finding with this ID already exists in the table."""
+    dynamodb = boto3.client("dynamodb")
+    response = dynamodb.get_item(
+        TableName="watchdog-findings",
+        Key={"finding_id": {"S": finding_id}}
+    )
+    return "Item" not in response
+
+
+
 
 def write_finding_to_dynamodb(finding):
     """Save a finding. Auto-detects String vs Number types."""
@@ -231,12 +246,21 @@ def handler(event, context):
     for snapshot in find_old_snapshots():
         findings.append(build_snapshot_finding(snapshot))
 
-    # Persist all findings
+    # Filter to just NEW findings (not seen in DynamoDB before)
+    new_findings = [f for f in findings if is_new_finding(f["finding_id"])]
+
+    # Persist all findings (idempotent — deterministic PK overwrites)
     for finding in findings:
         write_finding_to_dynamodb(finding)
 
-    # Build and send summary
-    summary = build_summary(findings)
+    # Silent run if nothing is new
+    if not new_findings:
+        message = "No new findings — silent run."
+        print(message)
+        return {"statusCode": 200, "body": message}
+
+    # Alert on NEW findings only
+    summary = build_summary(new_findings)
     print(summary)
 
     notify_slack(summary)
