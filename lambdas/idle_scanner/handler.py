@@ -1,58 +1,19 @@
-import boto3
-import json
-import urllib.request
+import boto3 
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
 
-# --- Handler (entry point) ---
-
-def handler(event, context):
-    findings = []
-
-    # Run each scanner
-    for volume in find_unattached_volumes():
-        findings.append(build_ebs_finding(volume))
-
-    for instance in find_stopped_ec2_instances():
-        findings.append(build_ec2_finding(instance))
-
-    for bucket in find_empty_s3_buckets():
-        findings.append(build_s3_finding(bucket))
-
-    for snapshot in find_old_snapshots():
-        findings.append(build_snapshot_finding(snapshot))
-
-    # Filter to just NEW findings (not seen in DynamoDB before)
-    new_findings = [f for f in findings if is_new_finding(f["finding_id"])]
-
-    # Persist all findings (idempotent — deterministic PK overwrites)
-    for finding in findings:
-        write_finding_to_dynamodb(finding)
-
-    # Silent run if nothing is new
-    if not new_findings:
-        message = "No new findings — silent run."
-        print(message)
-        return {"statusCode": 200, "body": message}
-
-    # Alert on NEW findings only
-    summary = build_summary(new_findings)
-    print(summary)
-    notify_slack(summary)
-    notify_telegram(summary)
-    return {"statusCode": 200, "body": summary}
 
 
-# --- Scanners ---
+# Scanners for idle resources in AWS
 
 def find_unattached_volumes():
     """EBS volumes with status 'available' (not attached to any instance)."""
-    ec2 = boto3.client("ec2")
+    ec2 = boto3.client('ec2')
     response = ec2.describe_volumes(
-        Filters=[{"Name": "status", "Values": ["available"]}]
-    )
-    return response["Volumes"]
+        Filters=[{'Name': 'status', 'Values': ['available']}]
+        )
+    return response['Volumes']
 
 
 def find_stopped_ec2_instances():
@@ -90,9 +51,10 @@ def find_old_snapshots(days=90):
     return [s for s in response["Snapshots"] if s["StartTime"] < cutoff]
 
 
-# --- Finding builders (one per resource type) ---
+#Builders for findings
 
 def build_ebs_finding(volume):
+    """Build a finding dictionary for each unattached EBS volume."""
     resource_id = volume["VolumeId"]
     size_gb = volume["Size"]
     return {
@@ -109,6 +71,7 @@ def build_ebs_finding(volume):
 
 
 def build_ec2_finding(instance):
+    """Build a finding dictionary for one stopped EC2 instance."""
     resource_id = instance["InstanceId"]
     return {
         "finding_id":              f"stopped_ec2:{resource_id}",
@@ -123,6 +86,7 @@ def build_ec2_finding(instance):
 
 
 def build_s3_finding(bucket):
+    """Build a finding dictionary for one empty S3 bucket."""
     resource_id = bucket["Name"]
     return {
         "finding_id":              f"empty_s3:{resource_id}",
@@ -136,6 +100,7 @@ def build_s3_finding(bucket):
 
 
 def build_snapshot_finding(snapshot):
+    """Build a finding dictionary for one old EBS snapshot."""
     size_gb = snapshot.get("VolumeSize", 0)
     age_days = (datetime.now(timezone.utc) - snapshot["StartTime"]).days
     resource_id = snapshot["SnapshotId"]
@@ -151,10 +116,10 @@ def build_snapshot_finding(snapshot):
     }
 
 
-# --- DynamoDB helpers ---
+#checking if a finding is new and writing to DynamoDB
 
 def is_new_finding(finding_id):
-    """Check if a finding with this ID already exists in the table."""
+    """Check if a finding with this ID already exists in DynamoDB."""
     dynamodb = boto3.client("dynamodb")
     response = dynamodb.get_item(
         TableName="watchdog-findings",
@@ -164,7 +129,7 @@ def is_new_finding(finding_id):
 
 
 def write_finding_to_dynamodb(finding):
-    """Save a finding. Auto-detects String vs Number types."""
+    """Write a finding to DynamoDB."""
     dynamodb = boto3.client("dynamodb")
     item = {}
     for key, value in finding.items():
@@ -174,31 +139,43 @@ def write_finding_to_dynamodb(finding):
             item[key] = {"N": str(value)}
         else:
             item[key] = {"S": str(value)}
+
     dynamodb.put_item(TableName="watchdog-findings", Item=item)
 
 
-# --- Summary formatting ---
 
 CATEGORY_LABELS = {
+    # Human-readable labels for each category of finding
     "idle_ebs":      "Unattached EBS volumes",
     "stopped_ec2":   "Stopped EC2 instances",
     "empty_s3":      "Empty S3 buckets",
     "old_snapshot":  "Old EBS snapshots (>90 days)",
 }
 
+def format_finding(finding):
+    """Turn one finding into a short readable string for Slack/Telegram."""
+    category = finding["category"]
+    resource_id = finding["resource_id"]
+    if category == "idle_ebs":
+        return f"  {resource_id} is unattached, {finding['size_gb']} GB {finding['volume_type']}, wasting ~${finding['estimated_monthly_cost']:.2f}/month"
+    if category == "stopped_ec2":
+        return f"  {resource_id} is stopped, {finding['instance_type']} instance"
+    if category == "empty_s3":
+        return f"  {resource_id} is empty"
+    if category == "old_snapshot":
+        return f"  {resource_id} is {finding['age_days']} days old, {finding['size_gb']} GB, costing ~${finding['estimated_monthly_cost']:.2f}/month"  
+    return f"  {resource_id}"
+
 
 def build_summary(findings):
-    if not findings:
-        return "Idle scan: nothing to clean up."
-
+    """Turn a list of findings into a summary string for Slack/Telegram."""
     total_cost = sum(f["estimated_monthly_cost"] for f in findings)
-
     by_category = defaultdict(list)
     for f in findings:
         by_category[f["category"]].append(f)
 
     lines = [
-        f"Idle scan: {len(findings)} finding(s), estimated waste ${total_cost:.2f}/mo",
+        f"Hey, found {len(findings)} things worth cleaning up, costing about ${total_cost:.2f}/month total.",
         "",
     ]
     for cat_key, cat_label in CATEGORY_LABELS.items():
@@ -213,53 +190,4 @@ def build_summary(findings):
     return "\n".join(lines).strip()
 
 
-def format_finding(finding):
-    """One-line human-readable string per finding."""
-    cat = finding["category"]
-    rid = finding["resource_id"]
-    if cat == "idle_ebs":
-        return f"  {rid}: {finding['size_gb']} GB {finding['volume_type']}, ~${finding['estimated_monthly_cost']:.2f}/mo"
-    if cat == "stopped_ec2":
-        return f"  {rid}: {finding['instance_type']} stopped"
-    if cat == "empty_s3":
-        return f"  {rid}: empty bucket"
-    if cat == "old_snapshot":
-        return f"  {rid}: {finding['size_gb']} GB, {finding['age_days']} days old, ~${finding['estimated_monthly_cost']:.2f}/mo"
-    return f"  {rid}"
 
-
-# --- Notifiers ---
-
-def notify_slack(message):
-    webhook_url = get_secret("watchdog/slack-webhook")
-    payload = json.dumps({"text": message}).encode("utf-8")
-    req = urllib.request.Request(
-        webhook_url,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req) as response:
-        return response.status
-
-
-def notify_telegram(message):
-    secret_json = get_secret("watchdog/telegram-bot")
-    creds = json.loads(secret_json)
-    url = f"https://api.telegram.org/bot{creds['bot_token']}/sendMessage"
-    payload = json.dumps({
-        "chat_id": creds["chat_id"],
-        "text": message,
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req) as response:
-        return response.status
-
-
-def get_secret(secret_id):
-    sm = boto3.client("secretsmanager")
-    response = sm.get_secret_value(SecretId=secret_id)
-    return response["SecretString"]
