@@ -203,9 +203,9 @@ resource "aws_iam_role_policy" "idle_scanner_ec2_read" {
   })
 }
 
-# Write findings to DynamoDB
-resource "aws_iam_role_policy" "idle_scanner_dynamodb_write" {
-  name = "dynamodb-write-findings"
+# access findings in DynamoDB
+resource "aws_iam_role_policy" "idle_scanner_dynamodb_access" {
+  name = "dynamodb-access-findings"
   role = aws_iam_role.idle_scanner_lambda.id
 
   policy = jsonencode({
@@ -213,7 +213,10 @@ resource "aws_iam_role_policy" "idle_scanner_dynamodb_write" {
     Statement = [
       {
         Effect   = "Allow"
-        Action   = "dynamodb:PutItem"
+        Action   = [
+          "dynamodb:PutItem",
+          "dynamodb:GetItem",
+        ]
         Resource = aws_dynamodb_table.findings.arn
       }
     ]
