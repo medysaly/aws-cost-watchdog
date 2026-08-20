@@ -1,4 +1,6 @@
 import boto3 
+import json
+import urllib.request
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
@@ -191,3 +193,72 @@ def build_summary(findings):
 
 
 
+
+def get_secret(secret_id):
+    """Retrieve a secret from AWS Secrets Manager."""
+    sm = boto3.client("secretsmanager")
+    response = sm.get_secret_value(SecretId=secret_id)
+    return response["SecretString"]
+
+
+def notify_slack(message):
+    """Post a message to Slack via the incoming webhook."""
+    webhook_url = get_secret("watchdog/slack-webhook")
+    payload = json.dumps({"text": message}).encode("utf-8")
+    req = urllib.request.Request(
+        webhook_url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req) as response:
+        return response.status
+
+
+def notify_telegram(message):
+    """Post a message to Telegram via the bot API."""
+    secret_json = get_secret("watchdog/telegram-bot")
+    creds = json.loads(secret_json)
+    url = f"https://api.telegram.org/bot{creds['bot_token']}/sendMessage"
+    payload = json.dumps({
+        "chat_id": creds["chat_id"],
+        "text": message,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req) as response:
+        return response.status
+
+def handler(event, context):
+    """Lambda entry point. Scans for idle resources and alerts on new findings."""
+    findings = []
+    for volume in find_unattached_volumes():
+        findings.append(build_ebs_finding(volume))
+
+    for instance in find_stopped_ec2_instances():
+        findings.append(build_ec2_finding(instance))
+
+    for bucket in find_empty_s3_buckets():
+        findings.append(build_s3_finding(bucket))
+
+    for snapshot in find_old_snapshots():
+        findings.append(build_snapshot_finding(snapshot))
+
+    new_findings = []
+    for finding in findings:
+        if is_new_finding(finding["finding_id"]):
+            write_finding_to_dynamodb(finding)
+            new_findings.append(finding)
+
+    if not new_findings:
+        message = "No new findings. Silent run."
+        print(message)
+        return {"statusCode": 200, "body": message}
+
+    summary = build_summary(new_findings)
+    print(summary)
+    notify_slack(summary)
+    notify_telegram(summary)
+    return {"statusCode": 200, "body": summary}
