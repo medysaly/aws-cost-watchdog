@@ -212,8 +212,8 @@ resource "aws_iam_role_policy" "idle_scanner_dynamodb_access" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "dynamodb:PutItem",
           "dynamodb:GetItem",
         ]
@@ -503,8 +503,11 @@ resource "aws_iam_role_policy" "tag_enforcer_dynamodb_write" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = "dynamodb:PutItem"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:GetItem",
+        ]
         Resource = aws_dynamodb_table.findings.arn
       }
     ]
